@@ -120,13 +120,13 @@ bam_to_fragment_size_bw <- function(file_path,
   
   # bin the coverage
   if (is_smooth) {
-    chr_tile <- tileGenome(gr_seqlengths, tilewidth = 1000, cut.last.tile.in.chrom = TRUE)
+    chr_tile <- tileGenome(gr_seqlengths, tilewidth = bin_length, cut.last.tile.in.chrom = TRUE)
     chr_tile$score <- foreach (chr = seqlevels(chr_tile), .combine = c) %dopar% 
       {
         if (!chr %in% names(frag_cov)) return(rep(NA, sum(seqnames(chr_tile) == chr)))
         bin_mean(x = frag_cov[[chr]],
-                 bin_width = 1000,
-                 stride = 1000, 
+                 bin_width = bin_length,
+                 stride = bin_length, 
                  add_name = F)
       }
     chr_tile <- chr_tile[!is.na(chr_tile$score)]
