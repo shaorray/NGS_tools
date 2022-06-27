@@ -101,7 +101,7 @@ bam_to_fragment_size_bw <- function(file_path,
                                                                isDuplicate = FALSE,
                                                                isSecondaryAlignment = FALSE),
                                  what = c("pos", "mpos", "isize", "mapq"),
-                                 mapqFilter = 10)
+                                 mapqFilter = min_mapq)
   gr <- GenomicAlignments::readGAlignments(file_path, param = sbp)
   
   gr <- gr[which(abs(rtracklayer::mcols(gr)$isize) < isize_lim)]
