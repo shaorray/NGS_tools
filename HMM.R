@@ -44,7 +44,8 @@ run_hmm <- function(observation, num_states = 10) {
   }
   
   
-  initializer <- function(num_states = 10,  observation) {
+  initializer <- function(num_states = 10, observation, 
+                          init_method = c("kmeans", "mclust", "quantile")) {
     # Args:
     # num_states: number of hidden states
     # observation: input observation matrix, log-transformed
@@ -52,22 +53,43 @@ run_hmm <- function(observation, num_states = 10) {
     num_features = ncol(observation)
     states = seq_len(num_states)
     
-    # sample initial state means
-    initi_state_mean = apply(observation, 2, 
-                             function(x) 
-                               sample(quantile(x, seq(0, 1, length.out = num_states)))
-    )
-    rownames(initi_state_mean) = states
+    # use clustering method to initialize state means
+    non_zero_observation = observation[rowSums(observation) > 0, ]
+    if (any(init_method == "kmeans")) {
+      k_res = suppressWarnings(kmeans(non_zero_observation, 
+                                      centers = num_states - 1,
+                                      iter.max = 100))
+      res_mu = k_res$centers
+    } else if (any(init_method == "mclust")) {
+      require(mclust)
+      message("Initialize HMM states with multi-normal distribution.")
+      m_res = mclust::Mclust(non_zero_observation, G = num_states - 1)
+      res_mu = t(m_res$parameters$mean)
+    } else {
+      res_mu = apply(observation, 2,
+                               function(x)
+                                 sample(quantile(x, seq(0.1, 1, length.out = num_states - 1)))
+                     )
+    }
     
-    initi_state_mu = apply(observation, 2, 
+    # set initialize state means
+    initi_state_mean = matrix(0, nrow = num_states, ncol = num_features)
+    initi_state_mean[-num_states, ] = res_mu
+    
+    rownames(initi_state_mean) = states
+    if (!is.null(colnames(observation))) colnames(initi_state_mean) = colnames(observation)
+    
+    # set initial state sd as the total
+    initi_state_sd = apply(observation, 2, 
                            function(x) 
                              rep(sd(x), num_states) 
     ) 
-    rownames(initi_state_mu) = states
+    rownames(initi_state_sd) = rownames(initi_state_mean)
+    colnames(initi_state_sd) = colnames(initi_state_mean)
     
     # states X observs
     emission_paras = list("mu" = initi_state_mean,  # mean of each state
-                          "sd" = initi_state_mu)  # standard deviation of each state
+                          "sd" = initi_state_sd)  # standard deviation of each state
     emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
     
     transition_probs = matrix(1, nrow = num_states, ncol = num_states) / num_states
@@ -270,27 +292,46 @@ run_hmm <- function(observation, num_states = 10) {
   }
   
   
-  hmm_iterator <- function(observation, hmm_param, max_iter = 20, show_plot = TRUE) {
+  hmm_iterator <- function(observation, hmm_param, 
+                           max_iter = 20, show_plot = TRUE,
+                           tolerence = 3) {
     
     hmm_param_update = hmm_param
     
     alpha_end_probs = c()
     
-    for (i in seq_len(20)) {
+    for (i in seq_len(max_iter)) {
       
       alpha_end_probs = 
         c(alpha_end_probs, 
           matrixStats::logSumExp(tail(forward(observation, hmm_param_update), 1)) )
       
-      # stop if increment is smaller than 0.001 %
+      # stop if increment is small compared with the initial states
       if (i > 1) {
-        if (diff(alpha_end_probs[c(i-1, i)]) / diff(alpha_end_probs[c(1, i)]) < 1e-6) break
+        if (diff(alpha_end_probs[c(i-1, i)]) / diff(alpha_end_probs[c(1, i)]) < 1e-5) {
+          tolerence = tolerence - 1
+          if (tolerence == 0) break
+        }
       }
       
       hmm_param_update = baum_welch(observation, hmm_param_update)
       
-      if (show_plot)
-        image(t(hmm_param_update$emission_paras$mu), main = paste("Iteration", i))
+      if (show_plot) {
+        # png(paste0("HMM_emission_state_mean_iteration_", i, ".png"), width = 800, height = 500)
+        image(t(hmm_param_update$emission_paras$mu), main = paste("Iteration", i),
+              axes = FALSE, ylab = "States")
+        axis(side = 1, at = seq(0, 1, length.out = ncol(observation)), labels = NA)
+        text(x = seq(0, 1, length.out = ncol(observation)),
+             y = par("usr")[3] - 0.1,
+             labels = colnames(observation),
+             xpd = NA,
+             adj = 0.8,
+             srt = 35)
+        axis(side = 2, at = seq(0, 1, length.out = length(hmm_param$states)), 
+             labels = hmm_param$states, las = 2)
+        # dev.off()
+      }
+        
     }
     
     hmm_param_update$alpha_end_probs = alpha_end_probs
