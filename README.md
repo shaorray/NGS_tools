@@ -7,4 +7,4 @@
 
   
 #### `R` functions and modules:
-  - **HMM.R**: genome segmentation with HMM log-normal model. Written in `R` to restrict external dependencies.
+  - **HMM.R**: genome segmentation with HMM log-normal model. Written in `R` to solve external dependency issues in [`TU filter`](https://github.com/shaorray/TU_filter).
