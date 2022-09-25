@@ -3,14 +3,16 @@
 
 # -----------------------------------------------------------------------------
 
-# DIY for genomic region segmentation
+# genomic region segmentation
 
 # -----------------------------------------------------------------------------
 
-run_hmm <- function(observation, num_states = 10) {
-  # Args:
-  # num_states: number of hidden states
-  # observation: input observation matrix, log-transformed
+#' Baum-welch HMM with log-normal probility estimation
+#' @param observation A matrix of features in normal distribution
+#' @param num_states  Number of hidden states
+#' @param init_method Initiation HMM states with kmeans, mclust, or quantile methods.
+#' 
+run_hmm <- function(observation, num_states = 10, init_method = "kmeans") {
   
   # -------------------------------- Steps ------------------------------------
   #
@@ -28,16 +30,16 @@ run_hmm <- function(observation, num_states = 10) {
 
   get_emission_probs <- function(observation, emission_paras) {
     
-    # output: (state, position) matrix
+    # output: (state, position) matrix in log
     
     num_states = nrow(emission_paras[["mu"]])
     emission_probs <- matrix(1, nrow = num_states, ncol = nrow(observation))
     
     for (i in seq_len(num_states)) { # joint probability
       emission_probs[i, ] = 
-        matrixStats::colProds(dnorm(t(observation), 
-                                    mean = emission_paras[["mu"]][i, ], 
-                                    sd = emission_paras[["sd"]][i, ]))
+        colSums(log(dnorm(t(observation), 
+                          mean = emission_paras[["mu"]][i, ], 
+                          sd = emission_paras[["sd"]][i, ]) + 1e-10))
     }
     rownames(emission_probs) <- rownames(emission_paras[["mu"]])
     emission_probs
@@ -56,6 +58,7 @@ run_hmm <- function(observation, num_states = 10) {
     # use clustering method to initialize state means
     non_zero_observation = observation[rowSums(observation) > 0, ]
     if (any(init_method == "kmeans")) {
+      message("Initialize HMM states with kmeans.")
       k_res = suppressWarnings(kmeans(non_zero_observation, 
                                       centers = num_states - 1,
                                       iter.max = 100))
@@ -90,7 +93,7 @@ run_hmm <- function(observation, num_states = 10) {
     # states X observs
     emission_paras = list("mu" = initi_state_mean,  # mean of each state
                           "sd" = initi_state_sd)  # standard deviation of each state
-    emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
+    log_emission_probs = get_emission_probs(observation, emission_paras) # log probs
     
     transition_probs = matrix(1, nrow = num_states, ncol = num_states) / num_states
     dimnames(transition_probs) = list(states, states)
@@ -99,10 +102,12 @@ run_hmm <- function(observation, num_states = 10) {
     hmm_param = list()
     hmm_param$states = states
     hmm_param$num_features = num_features
+    
     hmm_param$initstate_probs = rep(1, num_states) / num_states
-    hmm_param$transition_probs = transition_probs
+    hmm_param$log_transition_probs = log(transition_probs)
+    
     hmm_param$emission_paras = emission_paras
-    hmm_param$emission_probs = emission_probs
+    hmm_param$log_emission_probs = log_emission_probs
     hmm_param
   }
   
@@ -114,8 +119,8 @@ run_hmm <- function(observation, num_states = 10) {
     
     states = hmm_param$states
     log_initstate_probs  = log(hmm_param$initstate_probs)
-    log_transition_probs = log(hmm_param$transition_probs)
-    log_emission_probs = log(hmm_param$emission_probs)
+    log_transition_probs = hmm_param$log_transition_probs
+    log_emission_probs = hmm_param$log_emission_probs
     
     .len = nrow(observation)
     
@@ -143,8 +148,8 @@ run_hmm <- function(observation, num_states = 10) {
     # hmm_param: a parameter list
     
     states =  hmm_param$states
-    log_emission_probs   = log(hmm_param$emission_probs)
-    log_transition_probs = log(hmm_param$transition_probs)
+    log_emission_probs   = hmm_param$log_emission_probs
+    log_transition_probs = hmm_param$log_transition_probs
     
     .len = nrow(observation)
     beta = matrix(0, ncol = length(states), nrow = .len)
@@ -167,10 +172,12 @@ run_hmm <- function(observation, num_states = 10) {
     # observation: position X feature matrix
     # hmm_param: a parameter list
     
+    message("Find path with viterbi.")
+    
     states =  hmm_param$states
     log_initstate_probs  = log(hmm_param$initstate_probs)
-    log_emission_probs   = log(hmm_param$emission_probs)
-    log_transition_probs = log(hmm_param$transition_probs)
+    log_emission_probs   = hmm_param$log_emission_probs
+    log_transition_probs = hmm_param$log_transition_probs
     
     .len = nrow(observation)
     
@@ -204,10 +211,7 @@ run_hmm <- function(observation, num_states = 10) {
       state_path = tmp_path
     }
     
-    max_path = factor(state_path[[which.max(viterbi)]],
-                      levels = states[order(rowMeans(hmm_param$emission_paras$mu),
-                                            decreasing = TRUE)])
-    
+    max_path = state_path[[which.max(viterbi)]]
     
     list(max(viterbi), max_path)
   }
@@ -220,9 +224,8 @@ run_hmm <- function(observation, num_states = 10) {
     
     states =  hmm_param$states
     emission_paras = hmm_param$emission_paras
-    log_emission_probs   = log(hmm_param$emission_probs)
-    transition_probs = hmm_param$transition_probs
-    log_transition_probs = log(transition_probs)
+    log_emission_probs   = hmm_param$log_emission_probs
+    log_transition_probs = hmm_param$log_transition_probs
     
     .len = nrow(observation)
     if (.len == 0) return(NULL)
@@ -251,23 +254,28 @@ run_hmm <- function(observation, num_states = 10) {
     # M step
     # emission
     denominators = matrixStats::colLogSumExps(gamma)
-    
+    exp_gamma_denominators = exp(t(t(gamma) - denominators))
     for (i in seq_len(hmm_param$num_features)) {
       emission_paras[["mu"]][, i] = 
         exp(matrixStats::colLogSumExps(gamma + log(observation[, i])) - denominators)
     }
     
+    sd_tmp = emission_paras[["sd"]]
     for (i in seq_len(hmm_param$num_features)) {
       for (j in states) {
-        emission_paras[["sd"]][j, i] = 
-          exp((matrixStats::logSumExp(gamma[, j] + 
-                                        log((observation[, i] - 
-                                               emission_paras[["mu"]][j, i])^2) 
+        sd_tmp[j, i] = 
+          exp((matrixStats::logSumExp(gamma[, j] +
+                                        log((observation[, i] -
+                                               emission_paras[["mu"]][j, i])^2)
                                       ) - denominators[j]) / 2)
       }
     }
-    emission_paras[["sd"]][emission_paras[["sd"]] == 0] = 
-      quantile(emission_paras[["sd"]], 0.1) # limit zero
+    # limit min sd
+    sd_tmp = apply(sd_tmp, 2, 
+                   function(x) {
+                     x[x < 0.1 | is.na(x)] = median(x, na.rm = TRUE)
+                     x })
+    emission_paras[["sd"]] = sd_tmp
     
     # transition
     denominators = matrixStats::colLogSumExps(gamma[-.len, ])
@@ -275,18 +283,15 @@ run_hmm <- function(observation, num_states = 10) {
     for (i in states) { 
       numerators = matrixStats::colLogSumExps(xi[-.len, i, ])
       
-      transition_probs[i, ] = exp(numerators - denominators[i])
+      log_transition_probs[i, ] = numerators - denominators[i]
       
     }
-    transition_probs[is.na(transition_probs)] = 1e-200
-    # print(transition_probs)
-    
     
     # update parameters
-    hmm_param$initstate_probs = exp(gamma[1, ]) + 1e-200
-    hmm_param$emission_probs = get_emission_probs(observation, emission_paras)
+    hmm_param$initstate_probs = exp(gamma[1, ]) + 1e-20
+    hmm_param$log_emission_probs = get_emission_probs(observation, emission_paras)
     hmm_param$emission_paras = emission_paras
-    hmm_param$transition_probs = transition_probs
+    hmm_param$log_transition_probs = log_transition_probs
     
     hmm_param
   }
@@ -302,9 +307,11 @@ run_hmm <- function(observation, num_states = 10) {
     
     for (i in seq_len(max_iter)) {
       
+      # likelihood
       alpha_end_probs = 
         c(alpha_end_probs, 
           matrixStats::logSumExp(tail(forward(observation, hmm_param_update), 1)) )
+      message(paste0("Iteration ", i, ": log-likelihood ", alpha_end_probs[i]))
       
       # stop if increment is small compared with the initial states
       if (i > 1) {
@@ -318,7 +325,9 @@ run_hmm <- function(observation, num_states = 10) {
       
       if (show_plot) {
         # png(paste0("HMM_emission_state_mean_iteration_", i, ".png"), width = 800, height = 500)
-        image(t(hmm_param_update$emission_paras$mu), main = paste("Iteration", i),
+        mu = hmm_param_update$emission_paras$mu
+        mu = t(mu) / colMeans(mu, na.rm = TRUE)
+        image(mu[, rev(seq_len(ncol(mu)))], main = paste("Iteration", i),
               axes = FALSE, ylab = "States")
         axis(side = 1, at = seq(0, 1, length.out = ncol(observation)), labels = NA)
         text(x = seq(0, 1, length.out = ncol(observation)),
@@ -328,25 +337,54 @@ run_hmm <- function(observation, num_states = 10) {
              adj = 0.8,
              srt = 35)
         axis(side = 2, at = seq(0, 1, length.out = length(hmm_param$states)), 
-             labels = hmm_param$states, las = 2)
+             labels = rev(hmm_param$states), las = 2)
         # dev.off()
       }
-        
+      
     }
     
     hmm_param_update$alpha_end_probs = alpha_end_probs
     hmm_param_update
   }
   
-  # run -----------
+  #  ----------- run -----------
+  # adjust feature negative scales if exist
+  feature_mins <- colMins(observation)
+  observation <- t(t(observation) - feature_mins)
   
-  hmm_param <- initializer(num_states = 10, observation)
+  # initiate
+  hmm_param <- initializer(num_states = num_states, observation, init_method = "kmeans")
   
-  hmm_param <- hmm_iterator(observation, hmm_param)
+  if (F) {  # minor steps
+    alpha = forward(observation, hmm_param)
+    head(alpha)
+    tail(alpha)
+    
+    beta = backward(observation, hmm_param)
+    head(beta)
+    tail(beta)
+    
+    hmm_param <- baum_welch(observation, hmm_param)
+    hmm_param$emission_paras$mu
+    hmm_param$emission_paras$sd
+    head(t(hmm_param$log_emission_probs))
+    tail(t(hmm_param$log_emission_probs))
+  }
+    
+  # main steps
+  hmm_param <- hmm_iterator(observation, hmm_param, max_iter = 40, tolerence = 5)
+  hmm_param$emission_paras$mu <- t(t(hmm_param$emission_paras$mu) + feature_mins)
+  # print(hmm_param$emission_paras$mu)
   
+  # make prediction
   viterbi_path <- viterbi(observation, hmm_param)[[2]]
-
+  table(viterbi_path)
+  
+  gc()
+  
+  # output
+  message("Done.")
   list("hmm_param" = hmm_param,
        "viterbi_path" = viterbi_path)
   
-} # end of wrapper 
+} # end of the wrapper 
