@@ -56,7 +56,247 @@
 #
 # -----------------------------------------------------------------------------
 
+# Cpp functions
+Rcpp::cppFunction(
+  "NumericMatrix get_alpha_Cpp(NumericMatrix alpha, 
+                                 NumericVector log_initstate_probs,
+                                 NumericMatrix log_transition_probs, 
+                                 NumericMatrix log_emission_probs
+                                 ) {
+                int n = alpha.nrow(), k = alpha.ncol();
+                
+                for (int j = 0; j < k; ++j) {
+                  alpha(0, j) = log_initstate_probs(j) + log_emission_probs(j, 0);
+                }
+                
+                for (int i = 1; i < n; ++i) 
+                {
+                  for (int j = 0; j < k; ++j) 
+                  {
+                    double tmp = alpha(i-1, 0) + 
+                      log_transition_probs(0, j) + 
+                      log_emission_probs(j, i);
+                    
+                    for (int x = 1; x < k; ++x) 
+                    {
+                      double tmp_next = alpha(i-1, x) + 
+                      log_transition_probs(x, j) + 
+                      log_emission_probs(j, i);
+                      
+                      if (tmp_next > tmp) 
+                      {
+                        tmp = tmp_next + log(1 + exp(tmp - tmp_next));
+                      } else 
+                      {
+                        tmp = tmp + log(1 + exp(tmp_next - tmp));
+                      }
+                    }
+                    
+                    alpha(i, j) = tmp;
+                  }
+                }
+                return alpha;
+              }")
 
+Rcpp::cppFunction(
+  "NumericMatrix get_beta_Cpp(NumericMatrix beta, 
+                              NumericMatrix log_transition_probs, 
+                              NumericMatrix log_emission_probs 
+                              ) {
+                int n = beta.nrow(), k = beta.ncol();
+  
+                for (int i = n - 2; i >= 0; i--) 
+                {
+                  for (int j = 0; j < k; ++j) 
+                  {
+                    double tmp = beta(i + 1, 0) + 
+                      log_transition_probs(j, 0) + 
+                      log_emission_probs(0, i + 1);
+                    
+                    for (int x = 1; x < k; ++x) 
+                    {
+                      double tmp_next = beta(i + 1, x) + 
+                      log_transition_probs(j, x) + 
+                      log_emission_probs(x, i + 1);
+                      
+                      if (tmp_next > tmp) 
+                      {
+                        tmp = tmp_next + log(1 + exp(tmp - tmp_next));
+                      } else 
+                      {
+                        tmp = tmp + log(1 + exp(tmp_next - tmp));
+                      }
+                    }
+                    beta(i, j) = tmp;
+                  }
+                }
+                return beta;
+              }")
+
+Rcpp::cppFunction(
+  'IntegerVector get_viterbi_Cpp(List hmm_param,
+                                 List viterbi_paths,
+                                 int num_obs
+                                 ) {
+                int n = num_obs, k = hmm_param["num_states"];
+                
+                NumericMatrix log_emission_probs = hmm_param["log_emission_probs"];
+                NumericMatrix log_transition_probs = hmm_param["log_transition_probs"];
+                NumericVector initstate_probs = hmm_param["initstate_probs"];
+                
+                NumericVector viterbi_probs = log(initstate_probs) + log_emission_probs(_, 0);
+                
+                for (int i = 1; i < n; ++i) 
+                {
+                  // List tmp_viterbi_paths = viterbi_paths;
+                  NumericVector viterbi_tmp (k);
+                  
+                  for (int x = 0; x < k; ++x) 
+                  {
+                    NumericVector intermediate_probs = viterbi_probs + log_transition_probs(_, x);
+                    
+                    // find the max state
+                    int max_state = 0;
+                    double max_prob = intermediate_probs(0);
+                    for (int y = 0; y < k; ++y) 
+                    {
+                      if (max_prob < intermediate_probs(y)) 
+                      {
+                        max_state = y;
+                        max_prob = intermediate_probs(y);
+                      }
+                    }
+                    
+                    viterbi_tmp(x) = log_emission_probs(x, i) + max_prob; 
+                    
+                    IntegerVector tmp_max_path = viterbi_paths[max_state]; 
+                    tmp_max_path = clone(tmp_max_path);
+                    tmp_max_path[i] = x + 1;
+                    viterbi_paths[x] = tmp_max_path; 
+                  }
+                  viterbi_probs = viterbi_tmp; 
+                }
+                
+                // find which max state
+                int max_path = 0;
+                double max_prob = viterbi_probs(0);
+                for (int y = 0; y < k; ++y) 
+                {
+                  if (max_prob < viterbi_probs(y)) 
+                  {
+                    max_path = y;
+                    max_prob = viterbi_probs(y);
+                  }
+                }
+                return viterbi_paths[max_path];
+              }')
+
+Rcpp::cppFunction(
+  "NumericVector get_xi_Cpp(NumericVector xi, 
+                            NumericMatrix alpha, 
+                            NumericMatrix beta, 
+                            NumericMatrix log_transition_probs, 
+                            NumericMatrix log_emission_probs 
+                            ) {
+                int n = alpha.nrow(), k = alpha.ncol();
+                
+                for (int i = 0; i < n - 1; ++i) 
+                {
+                  double prob_sum = R_NegInf;
+                  for (int j = 0; j < k; ++j) //state from
+                  {
+                    for (int x = 0; x < k; ++x) //state to
+                    {
+                      double prob = alpha(i, j) + 
+                      log_transition_probs(j, x) + 
+                      log_emission_probs(x, i + 1) +
+                      beta(i + 1, x);
+                      
+                      xi(j + x * k + i * k * k) = prob;
+                      
+                      if (j == 0 && x == 0) 
+                      {
+                        prob_sum = prob;
+                      } 
+                      else if (prob > prob_sum) 
+                      {
+                        prob_sum = prob + log(1 + exp(prob_sum - prob));
+                      } 
+                      else 
+                      {
+                        prob_sum = prob_sum + log(1 + exp(prob - prob_sum));
+                      }
+                    }
+                  }
+                  
+                  for (int j = 0; j < k; ++j) 
+                  {
+                    for (int x = 0; x < k; ++x) 
+                    {
+                      xi(j + x * k + i * k * k) -= prob_sum;
+                    }
+                  }
+                }
+                return xi;
+              }")
+
+Rcpp::cppFunction(
+  'IntegerVector get_viterbi_Cpp(List hmm_param,
+                                 List viterbi_paths,
+                                 int num_obs
+                                 ) {
+                int n = num_obs, k = hmm_param["num_states"];
+                
+                NumericMatrix log_emission_probs = hmm_param["log_emission_probs"];
+                NumericMatrix log_transition_probs = hmm_param["log_transition_probs"];
+                NumericVector initstate_probs = hmm_param["initstate_probs"];
+                
+                NumericVector viterbi_probs = log(initstate_probs) + log_emission_probs(_, 0);
+                
+                for (int i = 1; i < n; ++i) 
+                {
+                  // List tmp_viterbi_paths = viterbi_paths;
+                  NumericVector viterbi_tmp (k);
+                  
+                  for (int x = 0; x < k; ++x) 
+                  {
+                    NumericVector intermediate_probs = viterbi_probs + log_transition_probs(_, x);
+                    
+                    // find the max state
+                    int max_state = 0;
+                    double max_prob = intermediate_probs(0);
+                    for (int y = 0; y < k; ++y) 
+                    {
+                      if (max_prob < intermediate_probs(y)) 
+                      {
+                        max_state = y;
+                        max_prob = intermediate_probs(y);
+                      }
+                    }
+                    
+                    viterbi_tmp(x) = log_emission_probs(x, i) + max_prob; 
+                    
+                    IntegerVector tmp_max_path = viterbi_paths[max_state]; 
+                    tmp_max_path = clone(tmp_max_path);
+                    tmp_max_path[i] = x + 1;
+                    viterbi_paths[x] = tmp_max_path; 
+                  }
+                  viterbi_probs = viterbi_tmp; 
+                }
+                
+                // find which max state
+                int max_path = 0;
+                double max_prob = viterbi_probs(0);
+                for (int y = 0; y < k; ++y) 
+                {
+                  if (max_prob < viterbi_probs(y)) 
+                  {
+                    max_path = y;
+                    max_prob = viterbi_probs(y);
+                  }
+                }
+                return viterbi_paths[max_path];
+              }')
 
 #' Baum-welch HMM with log-normal probability estimation
 #' @param observations A list of matrices with features in normal distribution
@@ -152,18 +392,19 @@ hmm_initializer <- function(observations = NULL,
 #' Multi-normal distribution for emission probabilities
 #' 
 get_emission_probs <- function(observation, emission_paras) {
-  # output: (state, position) matrix in log
+  # output: (state, position) emission matrix in log
   num_states = nrow(emission_paras[["mu"]])
-  emission_probs <- matrix(0, nrow = num_states, ncol = nrow(observation))
+  log_emission_probs <- matrix(0, nrow = num_states, ncol = nrow(observation))
   
   for (i in seq_len(num_states)) { # joint probability
-    emission_probs[i, ] = 
+    log_emission_probs[i, ] = 
       colSums(log(dnorm(t(observation), 
                         mean = emission_paras[["mu"]][i, ], 
-                        sd = emission_paras[["sd"]][i, ]) + 1e-10))
+                        sd = emission_paras[["sd"]][i, ]) + 1e-4))
   }
-  rownames(emission_probs) <- rownames(emission_paras[["mu"]])
-  emission_probs
+  log_emission_probs[log_emission_probs > 0] = 0
+  rownames(log_emission_probs) <- rownames(emission_paras[["mu"]])
+  log_emission_probs
 }
 
 
@@ -181,47 +422,6 @@ forward <- function(observation, hmm_param, is_last = FALSE) {
   alpha = matrix(0, ncol = hmm_param$num_states, nrow = nrow(observation))
   colnames(alpha) = hmm_param$states
   log_emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
-  
-  Rcpp::cppFunction(
-    "NumericMatrix get_alpha_Cpp(NumericMatrix alpha, 
-                                 NumericVector log_initstate_probs,
-                                 NumericMatrix log_transition_probs, 
-                                 NumericMatrix log_emission_probs
-                                 ) {
-                int n = alpha.nrow(), k = alpha.ncol();
-                
-                for (int j = 0; j < k; ++j) {
-                  alpha(0, j) = log_initstate_probs(j) + log_emission_probs(j, 0);
-                }
-                
-                for (int i = 1; i < n; ++i) 
-                {
-                  for (int j = 0; j < k; ++j) 
-                  {
-                    double tmp = alpha(i-1, 0) + 
-                      log_transition_probs(0, j) + 
-                      log_emission_probs(j, i);
-                    
-                    for (int x = 1; x < k; ++x) 
-                    {
-                      double tmp_next = alpha(i-1, x) + 
-                      log_transition_probs(x, j) + 
-                      log_emission_probs(j, i);
-                      
-                      if (tmp_next > tmp) 
-                      {
-                        tmp = tmp_next + log(1 + exp(tmp - tmp_next));
-                      } else 
-                      {
-                        tmp = tmp + log(1 + exp(tmp_next - tmp));
-                      }
-                    }
-                    
-                    alpha(i, j) = tmp;
-                  }
-                }
-                return alpha;
-              }")
   
   # output in log
   alpha = get_alpha_Cpp(alpha = alpha, 
@@ -246,41 +446,6 @@ backward <- function(observation, hmm_param) {
   beta = matrix(0, ncol = hmm_param$num_states, nrow = nrow(observation))
   colnames(beta) = hmm_param$states
   log_emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
-  
-  Rcpp::cppFunction(
-    "NumericMatrix get_beta_Cpp(NumericMatrix beta, 
-                              NumericMatrix log_transition_probs, 
-                              NumericMatrix log_emission_probs 
-                              ) {
-                int n = beta.nrow(), k = beta.ncol();
-  
-                for (int i = n - 2; i >= 0; i--) 
-                {
-                  for (int j = 0; j < k; ++j) 
-                  {
-                    double tmp = beta(i + 1, 0) + 
-                      log_transition_probs(j, 0) + 
-                      log_emission_probs(0, i + 1);
-                    
-                    for (int x = 1; x < k; ++x) 
-                    {
-                      double tmp_next = beta(i + 1, x) + 
-                      log_transition_probs(j, x) + 
-                      log_emission_probs(x, i + 1);
-                      
-                      if (tmp_next > tmp) 
-                      {
-                        tmp = tmp_next + log(1 + exp(tmp - tmp_next));
-                      } else 
-                      {
-                        tmp = tmp + log(1 + exp(tmp_next - tmp));
-                      }
-                    }
-                    beta(i, j) = tmp;
-                  }
-                }
-                return beta;
-              }")
   
   # output in log
   get_beta_Cpp(beta = beta, 
@@ -314,55 +479,6 @@ baum_welch <- function(observation, hmm_param) {
                  ncol = hmm_param$num_states, 
                  nrow = nrow(observation))
   colnames(gamma) = hmm_param$states
-  
-  Rcpp::cppFunction(
-    "NumericVector get_xi_Cpp(NumericVector xi, 
-                            NumericMatrix alpha, 
-                            NumericMatrix beta, 
-                            NumericMatrix log_transition_probs, 
-                            NumericMatrix log_emission_probs 
-                            ) {
-                int n = alpha.nrow(), k = alpha.ncol();
-                
-                for (int i = 0; i < n - 1; ++i) 
-                {
-                  double prob_sum = R_NegInf;
-                  for (int j = 0; j < k; ++j) //state from
-                  {
-                    for (int x = 0; x < k; ++x) //state to
-                    {
-                      double prob = alpha(i, j) + 
-                      log_transition_probs(j, x) + 
-                      log_emission_probs(x, i + 1) +
-                      beta(i + 1, x);
-                      
-                      xi(j + x * k + i * k * k) = prob;
-                      
-                      if (j == 0 && x == 0) 
-                      {
-                        prob_sum = prob;
-                      } 
-                      else if (prob > prob_sum) 
-                      {
-                        prob_sum = prob + log(1 + exp(prob_sum - prob));
-                      } 
-                      else 
-                      {
-                        prob_sum = prob_sum + log(1 + exp(prob - prob_sum));
-                      }
-                    }
-                  }
-                  
-                  for (int j = 0; j < k; ++j) 
-                  {
-                    for (int x = 0; x < k; ++x) 
-                    {
-                      xi(j + x * k + i * k * k) -= prob_sum;
-                    }
-                  }
-                }
-                return xi;
-              }")
   
   # E step
   xi = get_xi_Cpp(xi = xi,
@@ -453,11 +569,13 @@ average_parameters <- function(hmm_param_list) {
 
 hmm_iterator <- function(observation_list,
                          hmm_param,
-                         max_iter = 10, 
-                         tolerence = 3,
+                         max_iter = 20, 
+                         tolerence = 5,
                          show_plot = FALSE, 
                          seed = 1) {
-  
+  require(foreach)
+  require(doParallel)
+  registerDoParallel(cores = 4)
   set.seed(seed)
   n_obs = length(observation_list)
   cat("Process", n_obs, ifelse(n_obs > 1, "sequences.\n", "sequence.\n"))
@@ -467,28 +585,27 @@ hmm_iterator <- function(observation_list,
   for (iter in seq_len(max_iter)) {
     
     # update emission and transition parameters
-    n_obs_rand = sample(n_obs)
     hmm_param_list = list()
-    for (i in seq_len(n_obs)) { # each chromosome as a small batch will cause transition probs unstable
-      cat(paste("\r", (i * 100) %/% n_obs), 
-          '% |',
-          rep('=', i * 50 / n_obs),
-          ifelse(i == n_obs, "|\n", ">"), 
-          sep = '')
-      hmm_param_list = c(hmm_param_list,
-                         list(baum_welch(observation_list[[n_obs_rand[i]]], hmm_param)))
+    
+    # each chromosome as a small batch will cause transition probs unstable
+    hmm_param_list = foreach(obs = observation_list) %dopar% {
+      baum_welch(obs, hmm_param)
     }
+    
+    # for (i in seq_len(n_obs)) {
+    #   cat(paste("\r", (i * 100) %/% n_obs),
+    #       '% |',
+    #       rep('=', i * 50 / n_obs),
+    #       ifelse(i == n_obs, "|\n", ">"),
+    #       sep = '')
+    #   hmm_param_list = c(hmm_param_list,
+    #                      list(baum_welch(observation_list[[n_obs_rand[i]]], hmm_param)))
+    # }
     hmm_param = average_parameters(hmm_param_list)
-    # hmm_param2$log_transition_probs
     
     # compute new alpha
-    alpha_last_mat = NULL
-    for (i in seq_len(n_obs)) {
-      alpha_last_mat = rbind(alpha_last_mat,
-                             forward(observation_list[[i]],
-                                     hmm_param, 
-                                     is_last = TRUE)
-                             )
+    alpha_last_mat = foreach(obs = observation_list, .combine = rbind) %dopar% {
+      forward(obs, hmm_param, is_last = TRUE)
     }
     
     # forward likelihood
@@ -541,76 +658,21 @@ show_state_mu <- function(hmm_param, num_features, col_names, .title = "State av
 #' 
 get_viterbi <- function(observation_list, hmm_param) {
   
-  # get viterbi paths for each chromosome
-  Rcpp::cppFunction(
-    'IntegerVector get_viterbi_Cpp(List hmm_param,
-                                 List viterbi_paths,
-                                 int num_obs
-                                 ) {
-                int n = num_obs, k = hmm_param["num_states"];
-                
-                NumericMatrix log_emission_probs = hmm_param["log_emission_probs"];
-                NumericMatrix log_transition_probs = hmm_param["log_transition_probs"];
-                NumericVector initstate_probs = hmm_param["initstate_probs"];
-                
-                NumericVector viterbi_probs = log(initstate_probs) + log_emission_probs(_, 0);
-                
-                for (int i = 1; i < n; ++i) 
-                {
-                  // List tmp_viterbi_paths = viterbi_paths;
-                  NumericVector viterbi_tmp (k);
-                  
-                  for (int x = 0; x < k; ++x) 
-                  {
-                    NumericVector intermediate_probs = viterbi_probs + log_transition_probs(_, x);
-                    
-                    // find the max state
-                    int max_state = 0;
-                    double max_prob = intermediate_probs(0);
-                    for (int y = 0; y < k; ++y) 
-                    {
-                      if (max_prob < intermediate_probs(y)) 
-                      {
-                        max_state = y;
-                        max_prob = intermediate_probs(y);
-                      }
-                    }
-                    
-                    viterbi_tmp(x) = log_emission_probs(x, i) + max_prob; 
-                    
-                    IntegerVector tmp_max_path = viterbi_paths[max_state]; 
-                    tmp_max_path = clone(tmp_max_path);
-                    tmp_max_path[i] = x + 1;
-                    viterbi_paths[x] = tmp_max_path; 
-                  }
-                  viterbi_probs = viterbi_tmp; 
-                }
-                
-                // find which max state
-                int max_path = 0;
-                double max_prob = viterbi_probs(0);
-                for (int y = 0; y < k; ++y) 
-                {
-                  if (max_prob < viterbi_probs(y)) 
-                  {
-                    max_path = y;
-                    max_prob = viterbi_probs(y);
-                  }
-                }
-                return viterbi_paths[max_path];
-              }')
+  require(foreach)
+  require(doParallel)
+  registerDoParallel(cores = 4)
   
-  viterbi_path_list <- list()
-  for (i in seq_along(observation_list)) {
-    hmm_param$log_emission_probs = get_emission_probs(observation = observation_list[[i]],
-                                                       emission_paras = hmm_param$emission_paras)
+  message("Get viterbi paths.")
+  # get viterbi paths for each chromosome
+  
+  viterbi_path_list = foreach(obs = observation_list) %dopar% {
+    hmm_param$log_emission_probs = get_emission_probs(observation = obs,
+                                                      emission_paras = hmm_param$emission_paras)
     init_viterbi_paths = lapply(seq_len(hmm_param$num_states), 
-                                 function(x) as.integer(c(x, numeric(nrow(observation_list[[i]]) - 1))))
-    viterbi_path_list = c(viterbi_path_list,
-                          list(get_viterbi_Cpp(hmm_param,
-                                               init_viterbi_paths, 
-                                               nrow(observation_list[[i]])))
-                          )
+                                function(x) as.integer(c(x, numeric(nrow(obs) - 1))))
+    get_viterbi_Cpp(hmm_param,
+                    init_viterbi_paths, 
+                    nrow(obs))
   }
   
   if (!is.null(names(observation_list))) names(viterbi_path_list) = names(observation_list)
@@ -644,12 +706,10 @@ run_hmm <- function(observation_list,
     
     hmm_param <- baum_welch(observation_list[[1]], hmm_param)
     message("Baum-welch ok.\n")
-    gc()
   }
   
-    
   # main steps
-  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = 20, seed = seed)
+  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = 50, seed = seed)
   # hmm_param$emission_paras$mu <- t(t(hmm_param$emission_paras$mu) + feature_mins)
   show_state_mu(hmm_param,
                 ncol(observation_list[[1]]), 
@@ -659,10 +719,7 @@ run_hmm <- function(observation_list,
   viterbi_paths <- get_viterbi(observation_list, hmm_param)
   print(sapply(viterbi_paths, table))
   
-  gc()
-  
   # output
-  message("Done.")
   list("hmm_param" = hmm_param,
        "viterbi_paths" = viterbi_paths)
   
