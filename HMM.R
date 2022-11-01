@@ -65,19 +65,21 @@
 #' 
 hmm_initializer <- function(observations = NULL, 
                             num_states  = 10, 
-                            init_method = c("kmeans", "mclust", "quantile")) {
+                            init_method = c("kmeans", "mclust", "quantile"),
+                            seed = 1) {
   # Args:
   # num_states:  number of hidden states
   # observation: input observation matrix
   
   stopifnot(!is.null(observations) & length(observations) > 0)
+  set.seed(seed)
   
   num_features = ncol(observations[[1]])
   num_obsers = unlist(lapply(observations, nrow))
   states = seq_len(num_states)
   
-  # extract 1% data for initialization
-  num_obsers_small = num_obsers %/% 100
+  # extract 10% data for initialization
+  num_obsers_small = num_obsers %/% 10
   num_obsers_small_start = cumsum(num_obsers_small) - num_obsers_small + 1
   observation = matrix(0, nrow = sum(num_obsers_small), ncol = num_features)
   for (i in seq_along(observations)) {
@@ -124,7 +126,7 @@ hmm_initializer <- function(observations = NULL,
   # states X observs
   emission_paras = list("mu" = initi_state_mean,  # mean of each state
                         "sd" = initi_state_sd)  # standard deviation of each state
-  log_emission_probs = get_emission_probs(observation, emission_paras) # log probs
+  # log_emission_probs = get_emission_probs(observation, emission_paras) # log probs
   
   transition_probs = matrix(1, nrow = num_states, ncol = num_states) / num_states
   dimnames(transition_probs) = list(states, states)
@@ -142,7 +144,7 @@ hmm_initializer <- function(observations = NULL,
   hmm_param$log_transition_probs = log(transition_probs)
   
   hmm_param$emission_paras = emission_paras
-  hmm_param$log_emission_probs = log_emission_probs
+  # hmm_param$log_emission_probs = log_emission_probs
   hmm_param
 }
 
@@ -152,7 +154,7 @@ hmm_initializer <- function(observations = NULL,
 get_emission_probs <- function(observation, emission_paras) {
   # output: (state, position) matrix in log
   num_states = nrow(emission_paras[["mu"]])
-  emission_probs <- matrix(1, nrow = num_states, ncol = nrow(observation))
+  emission_probs <- matrix(0, nrow = num_states, ncol = nrow(observation))
   
   for (i in seq_len(num_states)) { # joint probability
     emission_probs[i, ] = 
@@ -178,6 +180,7 @@ forward <- function(observation, hmm_param, is_last = FALSE) {
   
   alpha = matrix(0, ncol = hmm_param$num_states, nrow = nrow(observation))
   colnames(alpha) = hmm_param$states
+  log_emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
   
   Rcpp::cppFunction(
     "NumericMatrix get_alpha_Cpp(NumericMatrix alpha, 
@@ -221,10 +224,10 @@ forward <- function(observation, hmm_param, is_last = FALSE) {
               }")
   
   # output in log
-  get_alpha_Cpp(alpha = alpha, 
-                log_initstate_probs = log(hmm_param$initstate_probs), 
-                log_transition_probs = hmm_param$log_transition_probs, 
-                log_emission_probs = hmm_param$log_emission_probs)
+  alpha = get_alpha_Cpp(alpha = alpha, 
+                        log_initstate_probs = log(hmm_param$initstate_probs), 
+                        log_transition_probs = hmm_param$log_transition_probs, 
+                        log_emission_probs = log_emission_probs)
   
   if (is_last)  {
     return(tail(alpha, 1))
@@ -232,6 +235,7 @@ forward <- function(observation, hmm_param, is_last = FALSE) {
     return(alpha)
   }
 }
+
 
 # backward
 backward <- function(observation, hmm_param) {
@@ -241,6 +245,7 @@ backward <- function(observation, hmm_param) {
   
   beta = matrix(0, ncol = hmm_param$num_states, nrow = nrow(observation))
   colnames(beta) = hmm_param$states
+  log_emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
   
   Rcpp::cppFunction(
     "NumericMatrix get_beta_Cpp(NumericMatrix beta, 
@@ -280,7 +285,7 @@ backward <- function(observation, hmm_param) {
   # output in log
   get_beta_Cpp(beta = beta, 
                log_transition_probs = hmm_param$log_transition_probs, 
-               log_emission_probs = hmm_param$log_emission_probs)
+               log_emission_probs = log_emission_probs)
 }
 
 
@@ -293,8 +298,8 @@ baum_welch <- function(observation, hmm_param) {
   if (nrow(observation) == 0) return(NULL)
   
   # start 
-  alpha = forward(observation, hmm_param)
-  beta = backward(observation, hmm_param)  
+  alpha = forward(observation = observation, hmm_param = hmm_param, is_last = FALSE)
+  beta = backward(observation = observation, hmm_param = hmm_param)  
   log_emission_probs = get_emission_probs(observation, hmm_param$emission_paras)
   
   xi = array(0, 
@@ -370,7 +375,10 @@ baum_welch <- function(observation, hmm_param) {
   gamma = gamma - matrixStats::rowLogSumExps(gamma)
   
   # M step
-  # emission
+  # update initial parameters
+  hmm_param$initstate_probs = exp(gamma[1, ])
+  
+  # update emission
   denominators = matrixStats::colLogSumExps(gamma)
   exp_gamma_denominators = exp(t(t(gamma) - denominators))
   
@@ -379,6 +387,7 @@ baum_welch <- function(observation, hmm_param) {
     hmm_param$emission_paras[["mu"]][, i] = 
       exp(matrixStats::colLogSumExps(gamma + log(observation[, i])) - denominators)
   }
+  
   # update sd
   sd_tmp = hmm_param$emission_paras[["sd"]]
   for (i in seq_len(hmm_param$num_features)) {
@@ -390,25 +399,54 @@ baum_welch <- function(observation, hmm_param) {
         ) - denominators[j]) / 2)
     }
     # limit min sd
-    sd_tmp_i = sd_tmp[, i]
-    idx_i = is.na(sd_tmp_i) | sd_tmp_i < (hmm_param$initi_state_sd[, i] / hmm_param$num_states / 10)
-    sd_tmp_i[idx_i] = hmm_param$initi_state_sd[idx_i, i] / hmm_param$num_states 
-    sd_tmp[, i] = sd_tmp_i
+    # sd_tmp_i = sd_tmp[, i]
+    # idx_i = is.na(sd_tmp_i) | sd_tmp_i < (hmm_param$initi_state_sd[, i] / hmm_param$num_states / 5)
+    # sd_tmp_i[idx_i] = hmm_param$initi_state_sd[idx_i, i] / sqrt(hmm_param$num_states)
+    # sd_tmp[, i] = sd_tmp_i
   }
   hmm_param$emission_paras[["sd"]] = sd_tmp
   
-  # transition
+  # update transition
   denominators = matrixStats::colLogSumExps(gamma[-nrow(observation), ])
   
   for (i in hmm_param$states) { 
-    numerators = matrixStats::rowLogSumExps(xi[, i, -nrow(observation)])
+    numerators = matrixStats::rowLogSumExps(xi[i, , -nrow(observation)])
     hmm_param$log_transition_probs[i, ] = numerators - denominators[i]
   }
   
-  # update parameters
-  hmm_param$initstate_probs = exp(gamma[1, ]) + 1e-20
-  hmm_param$log_emission_probs = get_emission_probs(observation, 
-                                                    hmm_param$emission_paras)
+  #
+  # hmm_param$log_transition_probs[hmm_param$log_transition_probs < -25] = -25
+  # hmm_param$log_transition_probs[hmm_param$log_transition_probs > 0] = 0
+  
+  # hmm_param$log_emission_probs = get_emission_probs(observation, 
+  #                                                   hmm_param$emission_paras)
+  hmm_param
+}
+
+
+average_parameters <- function(hmm_param_list) {
+  hmm_param = hmm_param_list[[1]]
+  for (i in seq_along(hmm_param_list)[-1]) {
+    hmm_param$initstate_probs = rbind(hmm_param$initstate_probs, 
+                                      hmm_param_list[[i]]$initstate_probs)
+    hmm_param$log_transition_probs = abind::abind(hmm_param$log_transition_probs, 
+                                                  hmm_param_list[[i]]$log_transition_probs, along = 3)
+    hmm_param$emission_paras$mu = abind::abind(hmm_param$emission_paras$mu, 
+                                                  hmm_param_list[[i]]$emission_paras$mu, along = 3)
+    hmm_param$emission_paras$sd = abind::abind(hmm_param$emission_paras$sd, 
+                                        hmm_param_list[[i]]$emission_paras$sd, along = 3)
+  }
+  
+  hmm_param$log_transition_probs = apply(hmm_param$log_transition_probs, 2, 
+                                         function(x) {
+                                           matrixStats::rowLogSumExps(x) - log(ncol(x))
+                                         })
+  hmm_param$initstate_probs = colMeans(hmm_param$initstate_probs)
+  hmm_param$emission_paras$mu = apply(hmm_param$emission_paras$mu, 2, 
+                                      function(x) rowMeans(x))
+  hmm_param$emission_paras$sd = apply(hmm_param$emission_paras$sd, 2, 
+                                      function(x) rowMeans(x))
+  
   hmm_param
 }
 
@@ -417,25 +455,31 @@ hmm_iterator <- function(observation_list,
                          hmm_param,
                          max_iter = 10, 
                          tolerence = 3,
-                         show_plot = FALSE) {
+                         show_plot = FALSE, 
+                         seed = 1) {
   
+  set.seed(seed)
   n_obs = length(observation_list)
   cat("Process", n_obs, ifelse(n_obs > 1, "sequences.\n", "sequence.\n"))
   
-  alpha_last_probs = c()
+  alpha_probs = c()
   
   for (iter in seq_len(max_iter)) {
     
     # update emission and transition parameters
     n_obs_rand = sample(n_obs)
-    for (i in seq_len(n_obs)) { # each chromosome as a small batch
+    hmm_param_list = list()
+    for (i in seq_len(n_obs)) { # each chromosome as a small batch will cause transition probs unstable
       cat(paste("\r", (i * 100) %/% n_obs), 
           '% |',
           rep('=', i * 50 / n_obs),
           ifelse(i == n_obs, "|\n", ">"), 
           sep = '')
-      hmm_param = baum_welch(observation_list[[n_obs_rand[i]]], hmm_param)
+      hmm_param_list = c(hmm_param_list,
+                         list(baum_welch(observation_list[[n_obs_rand[i]]], hmm_param)))
     }
+    hmm_param = average_parameters(hmm_param_list)
+    # hmm_param2$log_transition_probs
     
     # compute new alpha
     alpha_last_mat = NULL
@@ -448,14 +492,18 @@ hmm_iterator <- function(observation_list,
     }
     
     # forward likelihood
-    alpha_last_probs = c(alpha_last_probs, matrixStats::logSumExp(colSums(alpha_last_mat)))
-    message(paste0("Iteration ", iter, ": log-likelihood ", alpha_last_probs[iter]))
+    alpha_probs = c(alpha_probs, matrixStats::logSumExp(colSums(alpha_last_mat)))
+    message(paste0("Iteration ", iter, ": log-likelihood ", alpha_probs[iter]))
     
     # stop if increment is small compared with the initial states
     if (iter > 1) {
-      if (diff(alpha_last_probs[c(iter - 1, iter)]) / diff(alpha_last_probs[c(1, iter)]) < 1e-5) {
+      if (any(is.na(alpha_probs))) break
+      if (diff(alpha_probs[c(iter - 1, iter)]) / diff(alpha_probs[c(1, iter)]) < 1e-5) {
         tolerence = tolerence - 1
-        if (tolerence == 0) break
+        if (tolerence == 0) {
+          message("Parameter training finished.")
+          break
+        }
       }
     }
     
@@ -466,17 +514,18 @@ hmm_iterator <- function(observation_list,
 }
 
 
-show_state_mu <- function(hmm_param, .title = "State averages") {
+
+show_state_mu <- function(hmm_param, num_features, col_names, .title = "State averages") {
   # hmm_param: plot emission mu
   # iter: number of iterations
   mu = hmm_param$emission_paras$mu
   mu = t(mu) / colMeans(mu, na.rm = TRUE)
   image(mu[, rev(seq_len(ncol(mu)))], main = .title,
         axes = FALSE, ylab = "States")
-  axis(side = 1, at = seq(0, 1, length.out = ncol(observation)), labels = NA)
-  text(x = seq(0, 1, length.out = ncol(observation)),
+  axis(side = 1, at = seq(0, 1, length.out = num_features), labels = NA)
+  text(x = seq(0, 1, length.out = num_features),
        y = par("usr")[3] - 0.1,
-       labels = colnames(observation),
+       labels = col_names,
        xpd = NA,
        adj = 0.8,
        srt = 35)
@@ -571,48 +620,50 @@ get_viterbi <- function(observation_list, hmm_param) {
 
 run_hmm <- function(observation_list,
                     num_states = 10, 
-                    init_method = "kmeans") {
+                    init_method = "kmeans",
+                    seed = 1) {
   
-  # ------------------ run --------------------
+  # --------------------- run ------------------------
   # # adjust feature negative scales if exist
   # feature_mins <- matrixStats::colMins(observation)
   # observation <- t(t(observation) - feature_mins)
   
   # initiate
+  
   hmm_param <- hmm_initializer(observations = observation_list,
                                num_states = num_states, 
-                               init_method = init_method)
+                               init_method = init_method,
+                               seed = seed)
   
-  if (F) {  # minor steps
-    alpha = forward(observation, hmm_param)
-    head(alpha)
-    tail(alpha)
+  if (TRUE) {  # initialization steps
+    alpha = forward(observation_list[[1]], hmm_param)
+    message("Forward ok.")
     
-    beta = backward(observation, hmm_param)
-    head(beta)
-    tail(beta)
+    beta = backward(observation_list[[1]], hmm_param)
+    message("Backward ok.")
     
-    hmm_param <- baum_welch(observation, hmm_param)
-    hmm_param$emission_paras$mu
-    hmm_param$emission_paras$sd
-    head(t(hmm_param$log_emission_probs))
-    tail(t(hmm_param$log_emission_probs))
+    hmm_param <- baum_welch(observation_list[[1]], hmm_param)
+    message("Baum-welch ok.\n")
+    gc()
   }
+  
     
   # main steps
-  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = 20)
+  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = 20, seed = seed)
   # hmm_param$emission_paras$mu <- t(t(hmm_param$emission_paras$mu) + feature_mins)
-  show_state_mu(hmm_param)
+  show_state_mu(hmm_param,
+                ncol(observation_list[[1]]), 
+                colnames(observation_list[[1]]))
   
   # make prediction
   viterbi_paths <- get_viterbi(observation_list, hmm_param)
-  print(t(sapply(viterbi_paths, table)))
+  print(sapply(viterbi_paths, table))
   
   gc()
   
   # output
   message("Done.")
   list("hmm_param" = hmm_param,
-       "viterbi_path" = viterbi_path)
+       "viterbi_paths" = viterbi_paths)
   
 } # end of the wrapper 
