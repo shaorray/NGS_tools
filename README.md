@@ -7,4 +7,4 @@
 
   
 #### `R` functions and modules:
-  - **HMM.R**: genome segmentation with HMM log-normal model. Written in `R` as an internal dependency for [`TU filter`](https://github.com/shaorray/TU_filter) alternative to `GenoSTAN`'s HMM utility.
+  - **HMM.R**: genome segmentation with HMM multi-normal model. Written in `R` and `Rcpp` as an internal dependency for [`TU filter`](https://github.com/shaorray/TU_filter) alternative to `GenoSTAN`'s HMM utility.
