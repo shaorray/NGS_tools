@@ -134,64 +134,6 @@ Rcpp::cppFunction(
               }")
 
 Rcpp::cppFunction(
-  'IntegerVector get_viterbi_Cpp(List hmm_param,
-                                 List viterbi_paths,
-                                 int num_obs
-                                 ) {
-                int n = num_obs, k = hmm_param["num_states"];
-                
-                NumericMatrix log_emission_probs = hmm_param["log_emission_probs"];
-                NumericMatrix log_transition_probs = hmm_param["log_transition_probs"];
-                NumericVector initstate_probs = hmm_param["initstate_probs"];
-                
-                NumericVector viterbi_probs = log(initstate_probs) + log_emission_probs(_, 0);
-                
-                for (int i = 1; i < n; ++i) 
-                {
-                  // List tmp_viterbi_paths = viterbi_paths;
-                  NumericVector viterbi_tmp (k);
-                  
-                  for (int x = 0; x < k; ++x) 
-                  {
-                    NumericVector intermediate_probs = viterbi_probs + log_transition_probs(_, x);
-                    
-                    // find the max state
-                    int max_state = 0;
-                    double max_prob = intermediate_probs(0);
-                    for (int y = 0; y < k; ++y) 
-                    {
-                      if (max_prob < intermediate_probs(y)) 
-                      {
-                        max_state = y;
-                        max_prob = intermediate_probs(y);
-                      }
-                    }
-                    
-                    viterbi_tmp(x) = log_emission_probs(x, i) + max_prob; 
-                    
-                    IntegerVector tmp_max_path = viterbi_paths[max_state]; 
-                    tmp_max_path = clone(tmp_max_path);
-                    tmp_max_path[i] = x + 1;
-                    viterbi_paths[x] = tmp_max_path; 
-                  }
-                  viterbi_probs = viterbi_tmp; 
-                }
-                
-                // find which max state
-                int max_path = 0;
-                double max_prob = viterbi_probs(0);
-                for (int y = 0; y < k; ++y) 
-                {
-                  if (max_prob < viterbi_probs(y)) 
-                  {
-                    max_path = y;
-                    max_prob = viterbi_probs(y);
-                  }
-                }
-                return viterbi_paths[max_path];
-              }')
-
-Rcpp::cppFunction(
   "NumericVector get_xi_Cpp(NumericVector xi, 
                             NumericMatrix alpha, 
                             NumericMatrix beta, 
@@ -240,63 +182,76 @@ Rcpp::cppFunction(
                 return xi;
               }")
 
+
 Rcpp::cppFunction(
   'IntegerVector get_viterbi_Cpp(List hmm_param,
-                                 List viterbi_paths,
+                                 IntegerVector viterbi_paths,
                                  int num_obs
                                  ) {
                 int n = num_obs, k = hmm_param["num_states"];
-                
+
                 NumericMatrix log_emission_probs = hmm_param["log_emission_probs"];
                 NumericMatrix log_transition_probs = hmm_param["log_transition_probs"];
-                NumericVector initstate_probs = hmm_param["initstate_probs"];
-                
-                NumericVector viterbi_probs = log(initstate_probs) + log_emission_probs(_, 0);
-                
-                for (int i = 1; i < n; ++i) 
+                NumericVector log_initstate_probs = hmm_param["log_initstate_probs"];
+
+                NumericVector viterbi_probs = log_initstate_probs + log_emission_probs(_, 0);
+
+                for (int i = 1; i < n; ++i)
                 {
-                  // List tmp_viterbi_paths = viterbi_paths;
-                  NumericVector viterbi_tmp (k);
-                  
-                  for (int x = 0; x < k; ++x) 
+                  NumericVector probs_tmp (k);
+
+                  for (int x = 0; x < k; ++x)
                   {
                     NumericVector intermediate_probs = viterbi_probs + log_transition_probs(_, x);
-                    
-                    // find the max state
+
+                    // find the max transition state
                     int max_state = 0;
                     double max_prob = intermediate_probs(0);
-                    for (int y = 0; y < k; ++y) 
+                    for (int y = 0; y < k; ++y)
                     {
-                      if (max_prob < intermediate_probs(y)) 
+                      if (max_prob < intermediate_probs(y))
                       {
                         max_state = y;
                         max_prob = intermediate_probs(y);
                       }
                     }
-                    
-                    viterbi_tmp(x) = log_emission_probs(x, i) + max_prob; 
-                    
-                    IntegerVector tmp_max_path = viterbi_paths[max_state]; 
-                    tmp_max_path = clone(tmp_max_path);
-                    tmp_max_path[i] = x + 1;
-                    viterbi_paths[x] = tmp_max_path; 
+
+                    probs_tmp(x) = log_emission_probs(x, i) + max_prob;
                   }
-                  viterbi_probs = viterbi_tmp; 
+
+                  // find the max viterbi_probs state
+                  int max_state = 0;
+                  double max_prob = viterbi_probs(0);
+                  for (int y = 0; y < k; ++y)
+                  {
+                    if (max_prob < viterbi_probs(y))
+                    {
+                      max_state = y;
+                      max_prob = viterbi_probs(y);
+                    }
+                  }
+
+                  // update viterbi at i position
+                  viterbi_paths[i - 1] = max_state + 1;
+                  viterbi_probs = probs_tmp;
                 }
-                
+
                 // find which max state
                 int max_path = 0;
                 double max_prob = viterbi_probs(0);
-                for (int y = 0; y < k; ++y) 
+                for (int y = 0; y < k; ++y)
                 {
-                  if (max_prob < viterbi_probs(y)) 
+                  if (max_prob < viterbi_probs(y))
                   {
                     max_path = y;
                     max_prob = viterbi_probs(y);
                   }
                 }
-                return viterbi_paths[max_path];
+
+                viterbi_paths[n - 1] = max_path + 1;
+                return viterbi_paths;
               }')
+
 
 #' Baum-welch HMM with log-normal probability estimation
 #' @param observations A list of matrices with features in normal distribution
@@ -318,7 +273,7 @@ hmm_initializer <- function(observations = NULL,
   num_obsers = unlist(lapply(observations, nrow))
   states = seq_len(num_states)
   
-  # extract 10% data for initialization
+  # extract 1/10 data for initialization
   num_obsers_small = num_obsers %/% 10
   num_obsers_small_start = cumsum(num_obsers_small) - num_obsers_small + 1
   observation = matrix(0, nrow = sum(num_obsers_small), ncol = num_features)
@@ -358,7 +313,7 @@ hmm_initializer <- function(observations = NULL,
   # set initial state sd at total sd level
   initi_state_sd = apply(observation, 2, 
                          function(x) 
-                           rep(sd(x) / num_states, num_states) 
+                           rep(sd(x) / num_states * 2, num_states) 
   ) 
   rownames(initi_state_sd) = rownames(initi_state_mean)
   colnames(initi_state_sd) = colnames(initi_state_mean)
@@ -366,7 +321,6 @@ hmm_initializer <- function(observations = NULL,
   # states X observs
   emission_paras = list("mu" = initi_state_mean,  # mean of each state
                         "sd" = initi_state_sd)  # standard deviation of each state
-  # log_emission_probs = get_emission_probs(observation, emission_paras) # log probs
   
   transition_probs = matrix(1, nrow = num_states, ncol = num_states) / num_states
   dimnames(transition_probs) = list(states, states)
@@ -380,11 +334,10 @@ hmm_initializer <- function(observations = NULL,
   hmm_param$initi_state_mean = initi_state_mean
   hmm_param$initi_state_sd = initi_state_sd
   
-  hmm_param$initstate_probs = rep(1, num_states) / num_states
+  hmm_param$log_initstate_probs = log(rep(1, num_states) / num_states)
   hmm_param$log_transition_probs = log(transition_probs)
   
   hmm_param$emission_paras = emission_paras
-  # hmm_param$log_emission_probs = log_emission_probs
   hmm_param
 }
 
@@ -394,19 +347,20 @@ hmm_initializer <- function(observations = NULL,
 get_emission_probs <- function(observation, emission_paras) {
   # output: (state, position) emission matrix in log
   num_states = nrow(emission_paras[["mu"]])
-  log_emission_probs <- matrix(0, nrow = num_states, ncol = nrow(observation))
+  num_features = ncol(emission_paras[["mu"]])
+  log_emission_probs = matrix(0, nrow = nrow(observation), ncol = num_states)
   
-  for (i in seq_len(num_states)) { # joint probability
-    log_emission_probs[i, ] = 
-      colSums(log(dnorm(t(observation), 
-                        mean = emission_paras[["mu"]][i, ], 
-                        sd = emission_paras[["sd"]][i, ]) + 1e-4))
+  for (i in seq_len(num_states)) { 
+    tmp_p = dnorm(t(observation), 
+                  mean = emission_paras[["mu"]][i, ], 
+                  sd = emission_paras[["sd"]][i, ])
+    log_emission_probs[, i] = colSums(log(tmp_p + 1e-20)) # joint probability
   }
-  log_emission_probs[log_emission_probs > 0] = 0
-  rownames(log_emission_probs) <- rownames(emission_paras[["mu"]])
-  log_emission_probs
+  
+  log_emission_probs = log_emission_probs - matrixStats::rowLogSumExps(log_emission_probs)
+  colnames(log_emission_probs) = rownames(emission_paras[["mu"]])
+  return(t(log_emission_probs))
 }
-
 
 
 #' HMM parameters trainning with Baum-Welch
@@ -425,7 +379,7 @@ forward <- function(observation, hmm_param, is_last = FALSE) {
   
   # output in log
   alpha = get_alpha_Cpp(alpha = alpha, 
-                        log_initstate_probs = log(hmm_param$initstate_probs), 
+                        log_initstate_probs = hmm_param$log_initstate_probs, 
                         log_transition_probs = hmm_param$log_transition_probs, 
                         log_emission_probs = log_emission_probs)
   
@@ -491,60 +445,55 @@ baum_welch <- function(observation, hmm_param) {
   gamma = gamma - matrixStats::rowLogSumExps(gamma)
   
   # M step
-  # update initial parameters
-  hmm_param$initstate_probs = exp(gamma[1, ])
+  # update initial parameters, add 1e-20 basal probability
+  hmm_param$log_initstate_probs = gamma[1, ]
   
   # update emission
-  denominators = matrixStats::colLogSumExps(gamma)
-  exp_gamma_denominators = exp(t(t(gamma) - denominators))
+  exp_gamma_denominators = exp(t(t(gamma) - matrixStats::colLogSumExps(gamma)))
+  
+  # update sd
+  sd_tmp = hmm_param$emission_paras[["sd"]]
+  for (j in hmm_param$states) {
+    sd_tmp[j, ] =
+      sqrt(colSums(exp_gamma_denominators[, j] *
+                t((t(observation) -
+                     hmm_param$emission_paras[["mu"]][j, ])^2)))
+  }
+  # limit min sd
+  # for (i in seq_len(hmm_param$num_features)) {
+  #   # sd_tmp_i = sd_tmp[, i]
+  #   # idx_i = which(sd_tmp_i < (hmm_param$initi_state_sd[, i] / hmm_param$num_states / 10))
+  #   # sd_tmp_i[idx_i] = hmm_param$initi_state_sd[idx_i, i] / hmm_param$num_states
+  #   # 
+  #   # sd_tmp[, i] = sd_tmp_i
+  #   sd_tmp[, i] = sd_tmp[, i] + hmm_param$initi_state_sd[, i] / hmm_param$num_states
+  # }
+
+  hmm_param$emission_paras[["sd"]] = sd_tmp
   
   # update mu 
   for (i in seq_len(hmm_param$num_features)) {
     hmm_param$emission_paras[["mu"]][, i] = 
-      exp(matrixStats::colLogSumExps(gamma + log(observation[, i])) - denominators)
+      colSums(exp_gamma_denominators * observation[, i])
   }
-  
-  # update sd
-  sd_tmp = hmm_param$emission_paras[["sd"]]
-  for (i in seq_len(hmm_param$num_features)) {
-    for (j in hmm_param$states) {
-      sd_tmp[j, i] = 
-        exp((matrixStats::logSumExp(gamma[, j] +
-                                      log((observation[, i] -
-                                             hmm_param$emission_paras[["mu"]][j, i])^2)
-        ) - denominators[j]) / 2)
-    }
-    # limit min sd
-    # sd_tmp_i = sd_tmp[, i]
-    # idx_i = is.na(sd_tmp_i) | sd_tmp_i < (hmm_param$initi_state_sd[, i] / hmm_param$num_states / 5)
-    # sd_tmp_i[idx_i] = hmm_param$initi_state_sd[idx_i, i] / sqrt(hmm_param$num_states)
-    # sd_tmp[, i] = sd_tmp_i
-  }
-  hmm_param$emission_paras[["sd"]] = sd_tmp
   
   # update transition
   denominators = matrixStats::colLogSumExps(gamma[-nrow(observation), ])
-  
   for (i in hmm_param$states) { 
     numerators = matrixStats::rowLogSumExps(xi[i, , -nrow(observation)])
     hmm_param$log_transition_probs[i, ] = numerators - denominators[i]
   }
   
-  #
-  # hmm_param$log_transition_probs[hmm_param$log_transition_probs < -25] = -25
-  # hmm_param$log_transition_probs[hmm_param$log_transition_probs > 0] = 0
-  
-  # hmm_param$log_emission_probs = get_emission_probs(observation, 
-  #                                                   hmm_param$emission_paras)
   hmm_param
 }
 
 
 average_parameters <- function(hmm_param_list) {
+  
   hmm_param = hmm_param_list[[1]]
   for (i in seq_along(hmm_param_list)[-1]) {
-    hmm_param$initstate_probs = rbind(hmm_param$initstate_probs, 
-                                      hmm_param_list[[i]]$initstate_probs)
+    hmm_param$log_initstate_probs = rbind(hmm_param$log_initstate_probs, 
+                                      hmm_param_list[[i]]$log_initstate_probs)
     hmm_param$log_transition_probs = abind::abind(hmm_param$log_transition_probs, 
                                                   hmm_param_list[[i]]$log_transition_probs, along = 3)
     hmm_param$emission_paras$mu = abind::abind(hmm_param$emission_paras$mu, 
@@ -552,12 +501,17 @@ average_parameters <- function(hmm_param_list) {
     hmm_param$emission_paras$sd = abind::abind(hmm_param$emission_paras$sd, 
                                         hmm_param_list[[i]]$emission_paras$sd, along = 3)
   }
-  
+  # average transition probabilities
   hmm_param$log_transition_probs = apply(hmm_param$log_transition_probs, 2, 
                                          function(x) {
                                            matrixStats::rowLogSumExps(x) - log(ncol(x))
                                          })
-  hmm_param$initstate_probs = colMeans(hmm_param$initstate_probs)
+  # average initial probabilities
+  hmm_param$log_initstate_probs = matrixStats::colLogSumExps(hmm_param$log_initstate_probs)
+  hmm_param$log_initstate_probs = sapply(hmm_param$log_initstate_probs, function(x) matrixStats::logSumExp(c(x, -5)) )
+  hmm_param$log_initstate_probs = hmm_param$log_initstate_probs - matrixStats::logSumExp(hmm_param$log_initstate_probs)
+  
+  # average emission probabilities
   hmm_param$emission_paras$mu = apply(hmm_param$emission_paras$mu, 2, 
                                       function(x) rowMeans(x))
   hmm_param$emission_paras$sd = apply(hmm_param$emission_paras$sd, 2, 
@@ -592,15 +546,6 @@ hmm_iterator <- function(observation_list,
       baum_welch(obs, hmm_param)
     }
     
-    # for (i in seq_len(n_obs)) {
-    #   cat(paste("\r", (i * 100) %/% n_obs),
-    #       '% |',
-    #       rep('=', i * 50 / n_obs),
-    #       ifelse(i == n_obs, "|\n", ">"),
-    #       sep = '')
-    #   hmm_param_list = c(hmm_param_list,
-    #                      list(baum_welch(observation_list[[n_obs_rand[i]]], hmm_param)))
-    # }
     hmm_param = average_parameters(hmm_param_list)
     
     # compute new alpha
@@ -632,10 +577,12 @@ hmm_iterator <- function(observation_list,
 
 
 
-show_state_mu <- function(hmm_param, num_features, col_names, .title = "State averages") {
+show_state_mu <- function(hmm_param, .title = "State averages") {
   # hmm_param: plot emission mu
   # iter: number of iterations
   mu = hmm_param$emission_paras$mu
+  num_features = ncol(mu)
+  col_names = colnames(mu)
   mu = t(mu) / colMeans(mu, na.rm = TRUE)
   image(mu[, rev(seq_len(ncol(mu)))], main = .title,
         axes = FALSE, ylab = "States")
@@ -650,7 +597,43 @@ show_state_mu <- function(hmm_param, num_features, col_names, .title = "State av
        labels = rev(hmm_param$states), las = 2)
 }
 
-
+get_viterbi_R <- function(observation, hmm_param) {
+  # Args:
+  # hmm_param:   a parameter list
+  
+  message("Find viterbi path.")
+  
+  num_obs = nrow(observation)
+  # update emmision probs for the given data
+  hmm_param$log_emission_probs = get_emission_probs(observation = observation,
+                                                     emission_paras = hmm_param$emission_paras)
+  # start viterbi
+  viterbi_paths = lapply(seq_len(hmm_param$num_states),
+                         function(x) c(x, numeric(num_obs - 1)))
+  names(viterbi_paths) = hmm_param$states
+  viterbi_probs = hmm_param$log_initstate_probs + hmm_param$log_emission_probs[, 1]
+  
+  for (i in seq_len(num_obs)[-1]) {
+    
+    # tmp_viterbi_paths = viterbi_paths
+    probs_tmp = `names<-`(numeric(hmm_param$num_states), hmm_param$states)
+    
+    for (x in hmm_param$states) {
+      intermediate_probs = viterbi_probs + hmm_param$log_transition_probs[, x]
+      
+      max_state = names(intermediate_probs)[which.max(intermediate_probs)]
+      max_prob = max(intermediate_probs)
+      
+      probs_tmp[x] = hmm_param$log_emission_probs[x, i] + max_prob
+      
+      tmp_max_path = viterbi_paths[[max_state]]
+      tmp_max_path[i] = x
+      viterbi_paths[[x]] = tmp_max_path
+    }
+    viterbi_probs = probs_tmp
+  }
+  viterbi_paths[[which.max(viterbi_probs)]]
+}
 
 #' Compute viterbi path after training HMM parameters  
 #' @param observation
@@ -668,14 +651,12 @@ get_viterbi <- function(observation_list, hmm_param) {
   viterbi_path_list = foreach(obs = observation_list) %dopar% {
     hmm_param$log_emission_probs = get_emission_probs(observation = obs,
                                                       emission_paras = hmm_param$emission_paras)
-    init_viterbi_paths = lapply(seq_len(hmm_param$num_states), 
-                                function(x) as.integer(c(x, numeric(nrow(obs) - 1))))
-    get_viterbi_Cpp(hmm_param,
-                    init_viterbi_paths, 
-                    nrow(obs))
+    
+    get_viterbi_Cpp(hmm_param = hmm_param,
+                    viterbi_paths = integer(nrow(obs)),
+                    num_obs = nrow(obs))
   }
   
-  if (!is.null(names(observation_list))) names(viterbi_path_list) = names(observation_list)
   viterbi_path_list
 }
 
@@ -683,6 +664,7 @@ get_viterbi <- function(observation_list, hmm_param) {
 run_hmm <- function(observation_list,
                     num_states = 10, 
                     init_method = "kmeans",
+                    max_iter = 50,
                     seed = 1) {
   
   # --------------------- run ------------------------
@@ -709,11 +691,8 @@ run_hmm <- function(observation_list,
   }
   
   # main steps
-  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = 50, seed = seed)
-  # hmm_param$emission_paras$mu <- t(t(hmm_param$emission_paras$mu) + feature_mins)
-  show_state_mu(hmm_param,
-                ncol(observation_list[[1]]), 
-                colnames(observation_list[[1]]))
+  hmm_param <- hmm_iterator(observation_list, hmm_param, max_iter = max_iter, seed = seed)
+  show_state_mu(hmm_param)
   
   # make prediction
   viterbi_paths <- get_viterbi(observation_list, hmm_param)
