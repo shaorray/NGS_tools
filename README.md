@@ -3,7 +3,7 @@
 
 #### Command line `Rscript` tools:
   - **frag_coverage_script.R**: generates insertion size coverage bigwig from a paired-end bam file.
-  - **ATAC_QC.R**: process bam file and called peaks, and ouput reads quality (mapped rate) and enrichment (FRiP and TSS fraction).
+  - **ATAC_QC.R**: process a bam file and called peaks each time. Append reads quality (mapped rate) and enrichment (FRiP and TSS fraction) to `ATAC_report.txt`.
 
 
   
